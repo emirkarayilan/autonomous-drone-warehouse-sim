@@ -1,0 +1,128 @@
+import asyncio
+from mavsdk import System
+from mavsdk.offboard import (OffboardError, PositionNedYaw, VelocityNedYaw)
+import math
+
+SPEED_MS = 2.0
+
+TARGETS = [
+    (5.0, 2.3, 5.0, 90.0), (6.0, 2.3, 5.0, 90.0),   
+    (9.0, 2.3, 0.4, 90.0), (24.0, 2.3, 0.4, 90.0),  
+    (24.0, 2.3, 1.6, 90.0), (9.0, 2.3, 1.6, 90.0),  
+    (9.0, 2.3, 3.2, 90.0), (24.0, 2.3, 3.2, 90.0), 
+    (24.0, 1.2, 3.2, -90.0), (9.0, 1.2, 3.2, -90.0), 
+    (9.0, 1.2, 1.7, -90.0), (24.0, 1.2, 1.7, -90.0), 
+    (24.0, 1.2, 0.4, -90.0), (9.0, 1.2, 0.4, -90.0),
+    (5.0, 1.2, 5.0, -90.0), (0, 0, 0, 0)
+ 
+]
+
+DIST_TOL = 0.3  
+
+current_pos_ned = [0.0, 0.0, 0.0]
+
+async def telemetry_loop(drone):
+    async for position in drone.telemetry.position_velocity_ned():
+        current_pos_ned[0] = position.position.north_m
+        current_pos_ned[1] = position.position.east_m
+        current_pos_ned[2] = position.position.down_m
+
+def clamp_speed(vel, max_speed):
+
+    norm = math.sqrt(vel[0]**2 + vel[1]**2 + vel[2]**2)
+    if norm > max_speed:
+        factor = max_speed / norm
+        return [vel[0] * factor, vel[1] * factor, vel[2] * factor]
+    return vel
+
+async def goto_velocity(drone, tx, ty, tz, tyaw, speed_limit):
+
+    print(f"   >>> Hedef: N:{tx} E:{ty} D:{tz} | Hız Limit: {speed_limit} m/s")
+    
+    while True:
+        cx, cy, cz = current_pos_ned
+        
+        dx = tx - cx
+        dy = ty - cy
+        dz = tz - cz
+        
+        dist = math.sqrt(dx**2 + dy**2 + dz**2)
+        
+        if dist < DIST_TOL:
+            await drone.offboard.set_velocity_ned(VelocityNedYaw(0.0, 0.0, 0.0, tyaw))
+            print(f"   ✓ Ulaşıldı (Kalan: {dist:.2f}m)")
+            break
+        
+        vel_x = (dx / dist) * speed_limit
+        vel_y = (dy / dist) * speed_limit
+        vel_z = (dz / dist) * speed_limit
+        
+        if dist < 1.0:
+            slow_factor = max(0.2, dist / 1.0) 
+            vel_x *= slow_factor
+            vel_y *= slow_factor
+            vel_z *= slow_factor
+
+        await drone.offboard.set_velocity_ned(
+            VelocityNedYaw(vel_x, vel_y, vel_z, tyaw)
+        )
+        
+        print(f"   Mesafe: {dist:.2f}m | Hız Cmd: ({vel_x:.1f}, {vel_y:.1f}, {vel_z:.1f})", end='\r')
+        await asyncio.sleep(0.1) 
+
+async def main():
+    drone = System()
+    await drone.connect(system_address="udp://:14540")
+
+    print("-- Bağlanıyor...")
+    async for state in drone.core.connection_state():
+        if state.is_connected:
+            print("-- Bağlandı!")
+            break
+
+    asyncio.create_task(telemetry_loop(drone))
+    
+    while current_pos_ned == [0.0, 0.0, 0.0]:
+        await asyncio.sleep(0.1)
+
+    print("-- Kalkış yapılıyor...")
+    await drone.action.arm()
+    await drone.action.set_takeoff_altitude(2.0)
+    await drone.action.takeoff()
+    await asyncio.sleep(8)
+
+    print("-- Offboard başlatılıyor...")
+    
+    zero_vel = VelocityNedYaw(0.0, 0.0, 0.0, 90.0)
+    for _ in range(10):
+        await drone.offboard.set_velocity_ned(zero_vel)
+        await asyncio.sleep(0.1)
+
+    try:
+        await drone.offboard.start()
+        print("-- Offboard AKTİF (Velocity Control Modu)")
+    except OffboardError as error:
+        print(f"❌ Offboard Hatası: {error}")
+        await drone.action.land()
+        return
+
+    for i, pt in enumerate(TARGETS):
+        tx = pt[0]
+        ty = pt[1]
+        tz = -1 * pt[2]
+        tyaw = pt[3]
+        
+        await goto_velocity(drone, tx, ty, tz, tyaw, SPEED_MS)
+
+    print("\n\n✓ GÖREV TAMAMLANDI\n")
+
+    await drone.offboard.set_velocity_ned(VelocityNedYaw(0.0, 0.0, 0.0, 0.0))
+    try:
+        await drone.offboard.stop()
+    except:
+        pass
+        
+    await drone.action.land()
+
+if __name__ == "__main__":
+    asyncio.run(main())

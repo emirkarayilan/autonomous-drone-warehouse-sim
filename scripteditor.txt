@@ -1,0 +1,99 @@
+import omni
+import omni.usd
+import omni.replicator.core as rep
+import numpy as np
+from PIL import Image
+import os
+import carb
+
+CAMERA_PRIM   = "/World/quadrotor/body/camera"
+OUTPUT_FOLDER = r"C:\Users\simuser\Desktop\WareDrone-Meshine\sim_images\sim"
+WRITE_EVERY_N_FRAMES = 2  # Performans için 2 veya 3 yapabilirsin
+
+class FrameWriter:
+    def __init__(self):
+        self.frame_count = 0
+        self.rep_writer = None
+        self.render_product = None
+        self.rgb_annotator = None
+        self._sub = None
+        
+        if not os.path.exists(OUTPUT_FOLDER):
+            os.makedirs(OUTPUT_FOLDER)
+        
+    def start(self):
+        stage = omni.usd.get_context().get_stage()
+        if not stage.GetPrimAtPath(CAMERA_PRIM):
+            carb.log_error(f"[FrameWriter] HATA: '{CAMERA_PRIM}' yolu sahnede bulunamadı!")
+            print(f"!!! HATA: '{CAMERA_PRIM}' yok. Lütfen Stage panelinden yolu kontrol et.")
+            return
+
+        print(f"[FrameWriter] '{CAMERA_PRIM}' kamerasına bağlanılıyor...")
+
+        try:
+            # 640x480 çözünürlüğünde render product oluştur
+            self.render_product = rep.create.render_product(CAMERA_PRIM, (640, 480))
+            self.rgb_annotator = rep.annotators.get("rgb")
+            self.rgb_annotator.attach([self.render_product])
+        except Exception as e:
+            print(f"[FrameWriter] Replicator başlatılamadı: {e}")
+            return
+
+        self._sub = omni.kit.app.get_app().get_update_event_stream().create_subscription_to_pop(
+            self._on_update
+        )
+        print(f"[FrameWriter] BAŞLADI. Dosyalar buraya gidecek: {OUTPUT_FOLDER}")
+
+    def _on_update(self, event):
+        self.frame_count += 1
+
+        if self.frame_count % WRITE_EVERY_N_FRAMES != 0:
+            return
+
+        if not self.rgb_annotator: return
+        data = self.rgb_annotator.get_data()
+        
+        if data is None: return
+
+        if isinstance(data, dict):
+            # Genelde "data" anahtarı altındadır
+            data = data.get("data", None)
+            
+        if data is None or data.size == 0: return
+
+        if data.dtype != np.uint8:
+            # Eğer 0-1 aralığında float ise 255 ile çarp
+            if data.max() <= 1.0:
+                data = (data * 255).astype(np.uint8)
+            else:
+                data = data.astype(np.uint8)
+
+        if data.ndim == 3 and data.shape[2] == 4:
+            data = data[..., :3]
+
+        try:
+            img = Image.fromarray(data)
+            save_path = os.path.join(OUTPUT_FOLDER, "latest_frame.png")
+            img.save(save_path)
+            
+            if self.frame_count % 60 == 0:
+                print(f"[FrameWriter] Frame {self.frame_count} kaydedildi.")
+                
+        except Exception as e:
+            # Dosya yazma hatası simülasyonu durdurmasın diye pass geçiyoruz
+            pass 
+
+    def stop(self):
+        # Event dinlemeyi bırak
+        self._sub = None
+        self.rgb_annotator = None
+        print("[FrameWriter] DURDURULDU.")
+
+if "my_frame_writer" in globals():
+    try:
+        globals()["my_frame_writer"].stop()
+    except:
+        pass
+
+my_frame_writer = FrameWriter()
+my_frame_writer.start()
