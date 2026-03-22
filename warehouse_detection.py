@@ -7,16 +7,15 @@ from pathlib import Path
 from collections import deque
 from pyzbar.pyzbar import decode as decode_barcode
 
-# --- AYARLAR ---
 FRAME_SOURCE   = "shared_folder"
 SHARED_FOLDER  = r"C:\Users\simuser\Desktop\WareDrone-Meshine\sim_images\sim"
 ARUCO_DICT_ID  = cv2.aruco.DICT_6X6_250
-WINDOW_SIZE    = None # Örn: (1280, 720)
+WINDOW_SIZE    = None 
 
-# Simülasyon Kamerasının Tahmini Fiziksel Parametreleri (Kalibrasyon yoksa)
-# Isaac Sim'deki kameranın Horizontal FOV değeri genelde 60 veya 90 derecedir.
+
+
 SIM_FOV_DEGREE = 60.0 
-REAL_MARKER_WIDTH_M = 0.20  # Marker'ın gerçek hayattaki boyutu (metre cinsinden, örn: 20cm)
+REAL_MARKER_WIDTH_M = 0.20
 
 MAX_HISTORY_SIZE = 200
 BARCODE_QUALITY_THRESHOLD = 0
@@ -46,20 +45,15 @@ class SharedFolderReader:
             return self._placeholder_frame(), False
 
         try:
-            # 1. Optimasyon: Dosya içeriğini okumadan önce metadata'ya bak (Hızlı)
             stat = self.file_path.stat()
             current_mtime = stat.st_mtime_ns
 
             if current_mtime == self.last_mtime:
-                # Dosya değişmemiş, eski frame'i döndür (veya None)
                 return self._last_frame, True
 
-            # 2. Race Condition Koruması: Dosya yazılırken okumayı önlemek için basit retry
-            # Simülasyon dosyayı yazarken kilitli olabilir veya bozuk veri gelebilir.
             frame = None
             for _ in range(3): 
                 try:
-                    # cv2.imread dosya bozuksa None döner, exception fırlatmaz.
                     temp_frame = cv2.imread(str(self.file_path))
                     if temp_frame is not None and temp_frame.size > 0:
                         frame = temp_frame
@@ -72,7 +66,7 @@ class SharedFolderReader:
                 self._last_frame = frame
                 return frame, True
             
-            return self._last_frame, True # Okuyamadıysak son geçerli frame'i göster
+            return self._last_frame, True 
 
         except OSError:
             return None, False
@@ -104,14 +98,12 @@ class DetectionEngine:
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(aruco_dict_id)
         self.aruco_params = cv2.aruco.DetectorParameters()
         
-        # ArUco parametre optimizasyonu
         self.aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
         
         self.aruco_detector = cv2.aruco.ArucoDetector(
             self.aruco_dict, self.aruco_params
         )
 
-        # Fiziksel hesaplama sabitleri (Daha sonra frame genişliğine göre güncellenecek)
         self.focal_length_px = None 
 
     def _calculate_focal_length(self, image_width):
@@ -129,8 +121,6 @@ class DetectionEngine:
         
         results = {"barcodes": [], "arucos": []}
         
-        # 1. Barkod Tespiti
-        # Renkli görüntüde barkod okunabilir ama gray daha hızlıdır
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
         barcodes = decode_barcode(gray)
